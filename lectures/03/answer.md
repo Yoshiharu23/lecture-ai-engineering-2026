@@ -31,3 +31,10 @@
 - やったこと：`save_learning_log(title, content)` を追加し、学習記録を `learning_log/` に Markdown で保存するようにした。ファイル名は保存時刻から生成する。エージェントには `requires_approval=True` で登録し、承認待ちの `DeferredToolRequests` を受け取った CLI がタイトルと本文を表示して利用者に確認する。承認・拒否の結果と会話履歴を渡してエージェントを再実行する。
 - 結果：承認した場合だけ記録が保存され、拒否した場合は保存されないことをテストで確認した。保存処理は承認後にのみ実行され、空のタイトルや本文はエラーとして拒否する。
 - 気づき・疑問：ファイル書き込みのような副作用を伴うツールは、利用者の確認が完了するまで実行を保留することで、意図しない保存を防げる。
+
+### 発展（a）：ADKで作り直す
+
+- やったこと：`adk_agent/glossary_agent/` に ADK エージェントを作成した。`app/agent.py` の `INSTRUCTIONS` と `app/tools.py` の `search_glossary`、`get_lecture_summary`、`make_quiz` を利用し、`save_learning_log` は承認処理が必要なため含めていない。`app/` のファイルは変更していない。
+- 書き方の違い：Pydantic AI 版は `Agent` を作ってから `tool_plain()` で各ツールを登録する。ADK 版は `Agent` の `tools` 引数に関数をリストで渡す。どちらも指示文とツールのdocstringを使う。
+- 同じ質問への回答：`LoRAとQLoRAの違いを説明してください。定義をそれぞれ説明して、違いを簡潔にまとめてください。` を実行した。ADK 版も用語集に沿って両方の定義、QLoRAの量子化によるメモリ削減、主な違いを説明し、関連する回を第2回とした。回答内容はPydantic AI版とほぼ同じで、見出しや表現に違いがあった。
+- 実行コマンド：`PYTHONPATH=. uv run --with google-adk adk run adk_agent/glossary_agent`
