@@ -9,9 +9,11 @@ from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 from pydantic_ai.models.test import TestModel
 
+from app import agent as agent_module
+from app import tools
 from app.agent import agent
 
-BASE_TOOLS = {"search_glossary", "get_lecture_summary"}
+BASE_TOOLS = {"search_glossary", "get_lecture_summary", "make_quiz"}
 
 
 def _parts(result, kind):
@@ -40,3 +42,47 @@ def test_glossary_result_reaches_the_model():
         result = agent.run_sync("RAGとは？")
     returns = _parts(result, ToolReturnPart)
     assert returns and returns[0].tool_name == "search_glossary"
+
+
+def test_learning_log_is_saved_only_after_approval(tmp_path, monkeypatch):
+    log_dir = tmp_path / "learning_log"
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", log_dir)
+    with agent.override(model=TestModel(call_tools=["save_learning_log"])):
+        pending = agent.run_sync("学習記録を保存して")
+
+    assert isinstance(pending.output, DeferredToolRequests)
+    assert [call.tool_name for call in pending.output.approvals] == ["save_learning_log"]
+    assert not log_dir.exists()
+
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    approvals = agent_module.request_tool_approvals(pending.output)
+    with agent.override(model=TestModel(call_tools=[])):
+        completed = agent.run_sync(
+            message_history=pending.all_messages(),
+            deferred_tool_results=pending.output.build_results(approvals=approvals),
+        )
+
+    assert isinstance(completed.output, str)
+    saved_files = list(log_dir.glob("*.md"))
+    assert len(saved_files) == 1
+    assert saved_files[0].read_text(encoding="utf-8").startswith("# ")
+
+
+def test_declining_learning_log_approval_does_not_save(tmp_path, monkeypatch):
+    log_dir = tmp_path / "learning_log"
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", log_dir)
+    with agent.override(model=TestModel(call_tools=["save_learning_log"])):
+        pending = agent.run_sync("学習記録を保存して")
+
+    assert isinstance(pending.output, DeferredToolRequests)
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    approvals = agent_module.request_tool_approvals(pending.output)
+    assert approvals[pending.output.approvals[0].tool_call_id] is False
+
+    with agent.override(model=TestModel(call_tools=[])):
+        agent.run_sync(
+            message_history=pending.all_messages(),
+            deferred_tool_results=pending.output.build_results(approvals=approvals),
+        )
+
+    assert not log_dir.exists()

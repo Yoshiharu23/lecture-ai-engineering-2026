@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from app import tools
 
 
@@ -37,6 +39,40 @@ def test_search_reports_not_found():
 def test_lecture_summary():
     assert "エージェント" in tools.get_lecture_summary(3)
     assert "まだありません" in tools.get_lecture_summary(99)
+
+
+def test_make_quiz_returns_a_term_and_its_definition():
+    quiz = json.loads(tools.make_quiz(2))
+    lecture_terms = [term for term in tools.load_glossary() if term["lecture"] == 2]
+
+    assert any(quiz["question"] == f"「{term['term']}」の意味は？" for term in lecture_terms)
+    assert any(quiz["answer"] == term["definition"] for term in lecture_terms)
+
+
+def test_make_quiz_reports_when_lecture_has_no_terms():
+    assert "用語集にありません" in tools.make_quiz(99)
+
+
+def test_save_learning_log_writes_markdown(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path / "learning_log")
+
+    result = tools.save_learning_log("今日の学び", "承認フローを実装した。")
+
+    saved_files = list((tmp_path / "learning_log").glob("*.md"))
+    assert len(saved_files) == 1
+    assert saved_files[0].read_text(encoding="utf-8") == "# 今日の学び\n\n承認フローを実装した。\n"
+    assert result.startswith("学習記録を learning_log/")
+
+
+def test_save_learning_log_rejects_empty_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LEARNING_LOG_DIR", tmp_path / "learning_log")
+
+    with pytest.raises(ValueError, match="タイトル"):
+        tools.save_learning_log("  ", "本文")
+    with pytest.raises(ValueError, match="内容"):
+        tools.save_learning_log("タイトル", "  ")
+
+    assert not (tmp_path / "learning_log").exists()
 
 
 def test_default_question_of_lecture1_is_answerable_from_glossary():
