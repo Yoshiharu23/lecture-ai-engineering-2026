@@ -5,6 +5,7 @@
     uv run python -m app.agent --trace "LoRAとQLoRAの違いは？"   # ツール呼び出しを表示
     uv run python -m app.agent --mcp --trace "LoRAとは？"        # 第5回: ツールを MCP サーバーから受け取る
     uv run python -m app.agent --mcp --list-tools               # 第5回: モデルに見えるツール一覧（APIキー不要）
+    uv run python -m app.agent "今日の学習記録を保存して"        # 保存前に利用者が承認
 
 エージェント = モデル + ループ + ツール。
 モデルは tools.py の関数を「ツール」として呼び出し、その結果を見て回答を作る。
@@ -16,7 +17,7 @@ import inspect
 import json
 from pathlib import Path
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.exceptions import ModelHTTPError
 from fastmcp import Client
 from pydantic_ai.mcp import MCPToolset, StdioTransport
@@ -39,10 +40,11 @@ INSTRUCTIONS = """\
 """
 
 # モデルは実行時に渡す（テストではAPIを呼ばない TestModel に差し替えるため）
-agent = Agent(instructions=INSTRUCTIONS)
+agent = Agent(instructions=INSTRUCTIONS, output_type=[str, DeferredToolRequests])
 agent.tool_plain(tools.search_glossary)
 agent.tool_plain(tools.get_lecture_summary)
 agent.tool_plain(tools.make_quiz)
+agent.tool_plain(tools.save_learning_log, requires_approval=True)
 
 # 第5回: 使う MCP サーバーの設定ファイル。Claude Desktop や Cursor と同じ "mcpServers" 形式
 MCP_CONFIG = Path(__file__).resolve().parent / "mcp_servers.json"
@@ -109,6 +111,17 @@ def print_trace(result) -> None:
     print(f"[usage] {result.usage}")
 
 
+def request_tool_approvals(requests: DeferredToolRequests) -> dict[str, bool]:
+    """承認待ちツールの内容を表示し、利用者の判断を tool_call_id ごとに返す。"""
+    approvals = {}
+    for call in requests.approvals:
+        print(f"\n[承認待ち] {call.tool_name}")
+        print(json.dumps(call.args, ensure_ascii=False, indent=2))
+        decision = input("この内容を learning_log/ に保存しますか？ [y/N]: ")
+        approvals[call.tool_call_id] = decision.strip().casefold() in {"y", "yes"}
+    return approvals
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="学習支援エージェントに質問する")
     parser.add_argument("question", nargs="?")
@@ -129,6 +142,18 @@ def main() -> None:
         print("[tools] MCP サーバー（app/mcp_servers.json）")
     try:
         result = target.run_sync(args.question, model=build_model())
+        while isinstance(result.output, DeferredToolRequests):
+            requests = result.output
+            if not requests.approvals:
+                raise RuntimeError("承認以外の未対応な deferred tool request があります。")
+            deferred_results = requests.build_results(
+                approvals=request_tool_approvals(requests)
+            )
+            result = target.run_sync(
+                message_history=result.all_messages(),
+                deferred_tool_results=deferred_results,
+                model=build_model(),
+            )
     except ModelHTTPError as e:
         print(api_error_message(e.status_code, str(e.body)[:200]))
         raise SystemExit(1)
