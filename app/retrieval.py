@@ -185,6 +185,45 @@ def search_graph(query: str) -> dict:
             "max_hops": GRAPH_HOPS}
 
 
+def search_hybrid(query: str) -> dict:
+    """ベクトル検索とグラフ拡張に加え、関連入口の前後1ページを補う。"""
+    graph_result = search_graph(query)
+    pages = {page["page_id"]: page for page in load_pages(RAG_SOURCE)}
+    selected = {}
+
+    for hit in graph_result["seeds"]:
+        selected[hit["page_id"]] = {**hit, "source": "graph_seed", "hops": 0}
+    for hit in graph_result["expanded"]:
+        selected.setdefault(hit["page_id"], {**hit, "source": "graph_expanded"})
+
+    for page_id in list(selected):
+        page = pages[page_id]
+        same_document = sorted(
+            (candidate for candidate in pages.values()
+             if candidate["document_id"] == page["document_id"]),
+            key=lambda candidate: candidate["page"],
+        )
+        index = next(i for i, candidate in enumerate(same_document) if candidate["page_id"] == page_id)
+        for neighbor in same_document[max(0, index - 1):index + 2]:
+            selected.setdefault(neighbor["page_id"], {
+                **neighbor,
+                "distance": None,
+                "hops": 1,
+                "path": [{"id": page_id, "title": page["title"]},
+                         {"id": neighbor["page_id"], "title": neighbor["title"]}],
+                "source": "adjacent_page",
+            })
+
+    ordered = list(selected.values())[:GRAPH_MAX_RESULTS]
+    return {
+        "seeds": [hit for hit in ordered if hit["source"] == "graph_seed"],
+        "expanded": [hit for hit in ordered
+                     if hit["source"] in ("graph_expanded", "adjacent_page")],
+        "max_hops": GRAPH_HOPS,
+        "retrieval": "vector+graph+adjacent_pages",
+    }
+
+
 
 def run_full_context(agent, question: str, model, instructions: str, prompt_template: str):
     """全資料を一括投入し、検索ツールを使わずに回答する。"""

@@ -54,3 +54,33 @@ def test_existing_index_survives_failed_rebuild(materials):
         build_index(source, database, rebuild=True, embedder=embed)
     assert database.read_bytes() == before
     assert not list(database.parent.glob(".rag-build-*"))
+
+
+def test_hybrid_search_adds_adjacent_pages(monkeypatch):
+    pages = [
+        {"page_id": "lec03-main-p039", "document_id": "lec03-main", "lecture": 3,
+         "document_title": "AIエージェント", "section": "メモリ", "title": "Claude",
+         "page": 39, "content": "コンパクションとメモリ"},
+        {"page_id": "lec03-main-p040", "document_id": "lec03-main", "lecture": 3,
+         "document_title": "AIエージェント", "section": "メモリ", "title": "OpenClaw",
+         "page": 40, "content": "日々のメモと長期メモリ"},
+        {"page_id": "lec03-main-p041", "document_id": "lec03-main", "lecture": 3,
+         "document_title": "AIエージェント", "section": "メモリ", "title": "Skill",
+         "page": 41, "content": "メモリとSkill"},
+    ]
+    monkeypatch.setattr(retrieval, "load_pages", lambda *_: pages)
+    monkeypatch.setattr(
+        retrieval,
+        "search_graph",
+        lambda *_: {
+            "seeds": [{**pages[0], "distance": 0.1, "hops": 0}],
+            "expanded": [{**pages[1], "hops": 1}],
+            "max_hops": 2,
+        },
+    )
+
+    result = retrieval.search_hybrid("コンパクション メモリ")
+
+    assert result["retrieval"] == "vector+graph+adjacent_pages"
+    ids = {hit["page_id"] for hit in result["seeds"] + result["expanded"]}
+    assert ids == {"lec03-main-p039", "lec03-main-p040", "lec03-main-p041"}
